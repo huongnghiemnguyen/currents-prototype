@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Currents – Chuẩn bị câu hỏi cho buổi học</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 0; background: #f6f7f9; color: #1c2430; }
+  header { background: #1f3864; color: #fff; padding: 12px 32px; }
+  header h1 { margin: 0; font-size: 18px; }
+  header p { margin: 4px 0 0; font-size: 13px; }
+  main { max-width: 860px; margin: 24px auto 80px; padding: 0 16px; }
+  .card { background: #fff; border: 1px solid #dde1e8; border-radius: 8px; padding: 14px 16px; margin-bottom: 10px; }
+  .row { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+  button { padding: 8px 14px; border: 1px solid #1f3864; border-radius: 6px; background: #fff; color: #1f3864; cursor: pointer; }
+  button.primary { background: #1f3864; color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  fieldset { border: 0; padding: 0; margin: 0; }
+  label.field { display: block; font-weight: bold; margin: 12px 0 4px; }
+  textarea, input[type=text] { width: 100%; box-sizing: border-box; padding: 8px; font: inherit; border: 1px solid #b9c0cc; border-radius: 6px; }
+  .opt { display: flex; gap: 10px; align-items: center; }
+  .opt input[type=text] { flex: 1; }
+  .opt .pick { white-space: nowrap; font-size: 14px; }
+  .error { color: #b3261e; font-size: 13px; margin-top: 4px; }
+  .invalid { border-color: #b3261e !important; }
+  .msg { padding: 10px 12px; border-radius: 6px; margin: 14px 0; }
+  .ok { background: #e6f4ea; color: #1e6b35; }
+  .bad { background: #fdecea; color: #8c1d18; }
+  .badge { font-size: 12px; padding: 3px 8px; border-radius: 10px; background: #fff3cd; }
+  .badge.saved { background: #e6f4ea; }
+  .muted { color: #5b6573; font-size: 13px; }
+  #overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
+  #overlay[hidden] { display: none; }
+  .dialog { background: #fff; padding: 20px 24px; border-radius: 8px; max-width: 420px; }
+  .testbox { position: fixed; right: 12px; bottom: 12px; background: #fff; border: 1px dashed #8c1d18; padding: 8px 10px; font-size: 12px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>BlueOC Currents – Chuẩn bị câu hỏi cho buổi học</h1>
+  <p>Giảng viên Mai (U01) · S01 – PM101, Buổi 2: Hiểu người dùng</p>
+</header>
+<main id="app"></main>
+
+<div id="overlay" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+    <h3 id="dlgTitle">Bạn có thay đổi chưa lưu</h3>
+    <p>Bạn muốn tiếp tục sửa hay bỏ thay đổi?</p>
+    <div class="row">
+      <button id="btnKeep" class="primary">Tiếp tục sửa</button>
+      <button id="btnDiscard">Bỏ thay đổi</button>
+    </div>
+  </div>
+</div>
+
+<label class="testbox"><input type="checkbox" id="failSim"> [Kiểm thử] Giả lập lưu lỗi</label>
+
+<script>
+'use strict';
+// Câu gốc: chỉ đọc
+const ORIGINALS = Object.freeze([
+  { id: 'Q01', text: 'Khi tìm hiểu vì sao người dùng bỏ ứng dụng, nên bắt đầu bằng việc nào?',
+    options: { A: 'Hỏi về lần gần nhất họ sử dụng', B: 'Giới thiệu tính năng mới', C: 'Đề nghị chọn màu giao diện' }, answer: 'A' },
+  { id: 'Q02', text: 'Nhận định nào có bằng chứng rõ hơn?',
+    options: { A: 'Người dùng chắc chắn thích giao diện mới', B: 'Ba người được phỏng vấn đều gặp lỗi ở bước thanh toán', C: 'Đối thủ có tính năng này nên mình cũng cần' }, answer: 'B' },
+  { id: 'Q03', text: 'Sau khi tạo bản thử đầu tiên, nên làm gì?',
+    options: { A: 'Thêm nhiều tính năng', B: 'Mặc định đã giải quyết được vấn đề', C: 'Cho người dùng thử và quan sát chỗ gặp vướng' }, answer: 'C' }
+].map(q => Object.freeze({ ...q, options: Object.freeze(q.options) })));
+
+const KEY = 'currents.s01.copies.v1';
+const KEYS = ['A', 'B', 'C'];
+const app = document.getElementById('app');
+const overlay = document.getElementById('overlay');
+let editor = null; // { draft, saved (bản lưu gần nhất hoặc null), from, errors, status, saving }
+
+/* ---------- lưu trữ ---------- */
+function readCopies() {                       // ném lỗi nếu dữ liệu hỏng, để không ghi đè
+  const raw = localStorage.getItem(KEY);
+  if (raw === null) return [];
+  const list = JSON.parse(raw);
+  if (!Array.isArray(list)) throw new Error('Dữ liệu lưu không hợp lệ');
+  return list;
+}
+function writeCopy(copy) {
+  if (document.getElementById('failSim').checked) throw new Error('Giả lập lỗi lưu');
+  const list = readCopies();
+  const i = list.findIndex(c => c.copyId === copy.copyId);
+  if (i >= 0) list[i] = copy; else list.push(copy);
+  localStorage.setItem(KEY, JSON.stringify(list));
+  const check = readCopies().find(c => c.copyId === copy.copyId);   // đọc lại để xác nhận
+  if (JSON.stringify(check) !== JSON.stringify(copy)) throw new Error('Không xác nhận được dữ liệu đã ghi');
+}
+
+/* ---------- tiện ích ---------- */
+function el(tag, props = {}, ...children) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children.filter(c => c !== null && c !== undefined));
+  return node;
+}
+const clone = c => ({ ...c, options: { ...c.options } });
+const content = c => JSON.stringify([c.text.trim(), ...KEYS.map(k => c.options[k].trim()), c.answer]);
+const isDirty = () => !editor.saved || content(editor.draft) !== content(editor.saved);
+const newId = sourceId => `S01-${sourceId}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+function validate(d) {
+  const e = {};
+  if (!d.text.trim()) e.text = 'Hãy nhập nội dung câu hỏi';
+  KEYS.forEach(k => { if (!d.options[k].trim()) e[k] = `Hãy nhập lựa chọn ${k}`; });
+  if (!KEYS.includes(d.answer)) e.answer = 'Hãy chọn đúng một đáp án';
+  return e;
+}
+
+/* ---------- M1: trang chính ---------- */
+function showHome() {
+  editor = null;
+  const originals = ORIGINALS.map(q => el('div', { className: 'card row' },
+    el('div', {}, el('strong', { textContent: q.id + '  ' }), el('span', { textContent: q.text })),
+    el('button', { textContent: 'Dùng cho buổi học', onclick: () => createCopy(q) })));
+  let saved;
+  try {
+    const list = readCopies();
+    saved = list.length ? list.map(c => el('div', { className: 'card row' },
+      el('div', {},
+        el('div', { textContent: c.text }),
+        el('div', { className: 'muted', textContent: `Mã bản: ${c.copyId} · Câu gốc: ${c.sourceId}` })),
+      el('button', { textContent: 'Mở', onclick: () => showView(c.copyId) })))
+      : [el('p', { className: 'muted', textContent: 'Chưa có bản nào được lưu' })];
+  } catch (err) {
+    saved = [el('div', { className: 'msg bad', textContent: 'Không đọc được danh sách bản đã lưu trên trình duyệt này.' })];
+  }
+  app.replaceChildren(
+    el('h2', { textContent: 'Câu hỏi gốc' }), ...originals,
+    el('h2', { textContent: 'Bản đã lưu cho S01' }), ...saved);
+}
+
+function createCopy(q) {
+  const draft = { copyId: newId(q.id), sourceId: q.id, sessionId: 'S01', userId: 'U01', text: q.text,
+    options: { ...q.options }, answer: q.answer, createdAt: new Date().toISOString(), updatedAt: null };
+  openEditor(draft, null, 'home');
+}
+
+/* ---------- M2: sửa bản riêng ---------- */
+function openEditor(draft, saved, from) {
+  editor = { draft, saved, from, errors: {}, status: null, saving: false };
+  renderEditor();
+}
+
+function renderEditor() {
+  const { draft: d, errors, status, saving } = editor;
+  const errorOf = k => errors[k] ? el('div', { className: 'error', textContent: errors[k] }) : null;
+  const badge = el('span', { id: 'badge' });
+  const refreshBadge = () => {
+    const dirty = isDirty();
+    badge.textContent = dirty ? 'Chưa lưu' : 'Đã lưu';
+    badge.className = dirty ? 'badge' : 'badge saved';
+  };
+  // gõ phím: cập nhật nháp, bỏ lỗi của ô đó và thông báo cũ, không vẽ lại để giữ con trỏ
+  const bind = (input, key, set) => {
+    input.id = 'f-' + key;
+    if (errors[key]) input.classList.add('invalid');
+    input.oninput = () => {
+      set(input.value); delete editor.errors[key]; editor.status = null;
+      input.classList.remove('invalid'); input.parentNode.closest('.group').querySelector('.error')?.remove();
+      document.getElementById('status').replaceChildren(); refreshBadge();
+    };
+    return input;
+  };
+
+  const question = el('div', { className: 'group' },
+    el('label', { className: 'field', textContent: 'Nội dung câu hỏi', htmlFor: 'f-text' }),
+    bind(el('textarea', { rows: 3, value: d.text }), 'text', v => d.text = v),
+    errorOf('text'));
+
+  const options = KEYS.map(k => {
+    const radio = el('input', { type: 'radio', name: 'answer', id: 'ans-' + k, checked: d.answer === k });
+    radio.onclick = () => {                       // bấm lại đáp án đang chọn thì bỏ chọn
+      d.answer = d.answer === k ? null : k;
+      radio.checked = d.answer === k;
+      editor.status = null; delete editor.errors.answer;
+      document.getElementById('answerError').replaceChildren();
+      document.getElementById('status').replaceChildren(); refreshBadge();
+    };
+    return el('div', { className: 'group' },
+      el('label', { className: 'field', textContent: 'Lựa chọn ' + k, htmlFor: 'f-' + k }),
+      el('div', { className: 'opt' },
+        bind(el('input', { type: 'text', value: d.options[k] }), k, v => d.options[k] = v),
+        el('label', { className: 'pick' }, radio, ' Đáp án đúng')),
+      errorOf(k));
+  });
+
+  const statusBox = el('div', { id: 'status' });
+  statusBox.setAttribute('aria-live', 'polite');
+  if (saving) statusBox.append(el('div', { className: 'muted', textContent: 'Đang lưu…' }));
+  if (status === 'ok') statusBox.append(el('div', { className: 'msg ok', textContent: 'Đã lưu thành công' }));
+  if (status === 'fail') statusBox.append(el('div', { className: 'msg bad row' },
+    el('span', { textContent: 'Thay đổi chưa được lưu' }),
+    el('button', { id: 'btnRetry', textContent: 'Thử lại', onclick: save })));
+  if (status === 'invalid') statusBox.append(el('div', { className: 'msg bad', textContent: 'Chưa lưu. Hãy sửa các phần được đánh dấu.' }));
+
+  app.replaceChildren(
+    el('div', { className: 'row' }, el('h2', { textContent: 'Sửa bản riêng' }), badge),
+    el('p', { className: 'muted', textContent: `Mã bản: ${d.copyId} · Câu gốc: ${d.sourceId} · Buổi học: ${d.sessionId}` }),
+    el('div', { className: 'card' },
+      el('fieldset', { disabled: saving }, question, ...options,
+        el('div', { id: 'answerError' }, errorOf('answer'))),
+      statusBox,
+      el('div', { className: 'row' },
+        el('button', { id: 'btnBack', textContent: 'Quay lại', onclick: requestLeave, disabled: saving }),
+        el('button', { id: 'btnSave', className: 'primary', textContent: 'Lưu', onclick: save, disabled: saving }))));
+  refreshBadge();
+}
+
+function save() {
+  if (!editor || editor.saving) return;           // chặn bấm lặp
+  editor.errors = validate(editor.draft);
+  if (Object.keys(editor.errors).length) { editor.status = 'invalid'; renderEditor(); return; }
+  editor.saving = true; editor.status = null; renderEditor();
+  const current = editor;
+  setTimeout(() => {                               // độ trễ ngắn để thấy trạng thái đang lưu
+    const copy = clone(current.draft);
+    copy.text = copy.text.trim();
+    KEYS.forEach(k => copy.options[k] = copy.options[k].trim());
+    copy.updatedAt = new Date().toISOString();
+    try {
+      writeCopy(copy);
+      current.saved = clone(copy); current.draft = clone(copy); current.status = 'ok';
+    } catch (err) {
+      current.status = 'fail';                     // giữ nguyên nội dung đang sửa
+    }
+    current.saving = false;
+    if (editor === current) renderEditor();
+  }, 400);
+}
+
+/* ---------- M4: rời khi chưa lưu ---------- */
+function requestLeave() {
+  if (isDirty()) { showDialog(true); document.getElementById('btnKeep').focus(); }
+  else leave();
+}
+function showDialog(open) {
+  overlay.hidden = !open;
+  app.inert = open;                               // chặn bàn phím chạm vào màn hình phía sau
+}
+function leave() {
+  const { from, saved } = editor;
+  if (from === 'view' && saved) showView(saved.copyId); else showHome();
+}
+document.getElementById('btnKeep').onclick = () => { showDialog(false); };
+document.getElementById('btnDiscard').onclick = () => { showDialog(false); leave(); };
+
+/* ---------- M3: xem lại ---------- */
+function showView(copyId) {
+  editor = null;
+  let c;
+  try { c = readCopies().find(x => x.copyId === copyId); } catch (err) { c = undefined; }
+  if (!c) { showHome(); return; }
+  app.replaceChildren(
+    el('h2', { textContent: 'Xem lại bản đã lưu' }),
+    el('p', { className: 'muted', textContent: `Mã bản: ${c.copyId} · Câu gốc: ${c.sourceId} · Buổi học: ${c.sessionId}` }),
+    el('div', { className: 'card', id: 'viewCard' },
+      el('p', {}, el('strong', { textContent: c.text })),
+      ...KEYS.map(k => el('p', { textContent: `${k}. ${c.options[k]}${c.answer === k ? '   ✔ Đáp án đúng' : ''}` }))),
+    el('div', { className: 'row' },
+      el('button', { id: 'btnHome', textContent: 'Quay lại', onclick: showHome }),
+      el('button', { id: 'btnEdit', className: 'primary', textContent: 'Sửa', onclick: () => openEditor(clone(c), clone(c), 'view') })));
+}
+
+showHome();
+</script>
+</body>
+</html>
